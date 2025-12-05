@@ -1,0 +1,47 @@
+{
+  "datetime": "2025-11-28T15:26:42.253801",
+  "total_students": 1,
+  "present": 1,
+  "absent": 0,
+  "attendance": [
+    {
+      "name": "Long",
+      "id": "1",
+      "check_in_time": "2025-11-28T15:25:46.142262",
+      "confidence": 0.5434330701828003,
+      "primary_action": "raising_hand",
+      "action_history": [
+        "raising_hand",
+        "raising_hand",
+        "attentive",
+        "writing",
+        "attentive",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand",
+        "raising_hand"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+
+opencv-python
+numpy<2
+insightface
+onnxruntime-gpu
+torch
+torchvision
+mediapipe
+Pillow

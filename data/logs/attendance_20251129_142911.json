@@ -1,0 +1,24 @@
+{
+  "datetime": "2025-11-29T14:29:11.298296",
+  "total_students": 1,
+  "present": 1,
+  "absent": 0,
+  "attendance": [
+    {
+      "name": "Long",
+      "id": "1",
+      "check_in_time": "2025-11-29T14:29:07.330121",
+      "confidence": 0.5635796785354614,
+      "primary_action": "attentive",
+      "action_history": [
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive"
+      ]
+    }
+  ]
+}

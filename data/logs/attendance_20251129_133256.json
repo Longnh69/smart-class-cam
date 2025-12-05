@@ -1,0 +1,47 @@
+{
+  "datetime": "2025-11-29T13:32:56.393833",
+  "total_students": 1,
+  "present": 1,
+  "absent": 0,
+  "attendance": [
+    {
+      "name": "Long",
+      "id": "1",
+      "check_in_time": "2025-11-29T13:32:36.354075",
+      "confidence": 0.4841007888317108,
+      "primary_action": "attentive",
+      "action_history": [
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive",
+        "attentive"
+      ]
+    }
+  ]
+}
