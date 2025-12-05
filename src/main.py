@@ -12,6 +12,7 @@ import mediapipe as mp
 from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple, Dict, Optional
+from pathlib import Path
 
 # Import torch first to load CUDA libraries
 try:
@@ -46,7 +47,8 @@ RESIZE_BEFORE_PROCESS = True  # Resize frame before processing
 PROCESS_WIDTH = 480  # Width to resize to (smaller = faster)
 
 # Paths
-DATA_DIR = Path("data")
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+DATA_DIR = PROJECT_ROOT / "data"
 KNOWN_FACES_DIR = DATA_DIR / "known_faces"
 UNKNOWN_FACES_DIR = DATA_DIR / "unknown_faces"
 LOGS_DIR = DATA_DIR / "logs"
