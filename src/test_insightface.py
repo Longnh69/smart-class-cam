@@ -195,12 +195,29 @@ if len(known_faces) == 0:
     print("   - Nhấn 'r' để bắt đầu đăng ký")
     print("   - Nhập tên và Enter")
 
+# ========== CHỌN NGUỒN CAMERA ==========
+print("\nChọn nguồn video:")
+print("1. RTSP (mặc định)")
+print("2. Webcam")
+source_choice = input("Lựa chọn (1/2) [1]: ").strip() or "1"
+
+video_source = CAMERA_ID
+if source_choice == "2":
+    webcam_index = input("Chọn webcam index [0]: ").strip()
+    video_source = int(webcam_index) if webcam_index else 0
+    print(f"Sử dụng webcam index: {video_source}")
+else:
+    custom_rtsp = input(f"RTSP URL (Enter để dùng mặc định)\nMặc định: {CAMERA_ID}\n> ").strip()
+    if custom_rtsp:
+        video_source = custom_rtsp
+    print(f"Sử dụng RTSP: {video_source}")
+
 # ========== MỞ CAMERA ==========
 print("\n📹 Đang mở camera...")
-cap = cv2.VideoCapture(CAMERA_ID)
+cap = cv2.VideoCapture(video_source)
 
 if not cap.isOpened():
-    print("❌ Không thể mở camera!")
+    print(f"❌ Không thể mở camera! Kiểm tra nguồn: {video_source}")
     exit()
 
 # Set resolution

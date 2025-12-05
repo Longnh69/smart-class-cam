@@ -1,1 +1,3 @@
 venv
+data/logs
+activate.ps1

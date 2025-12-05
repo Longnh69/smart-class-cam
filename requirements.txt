@@ -1,9 +1,9 @@
 
-opencv-python
-numpy<2
-insightface
-onnxruntime-gpu
-torch
-torchvision
-mediapipe
-Pillow
+opencv-python==4.8.1.78
+numpy==1.26.4
+insightface==0.7.3
+onnxruntime-gpu==1.16.3
+torch==2.1.2+cu118
+torchvision==0.16.2+cu118
+mediapipe==0.10.11
+Pillow==10.3.0
