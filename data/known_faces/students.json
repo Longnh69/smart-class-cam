@@ -4,5 +4,17 @@
     "name": "Long",
     "photo": "data\\known_faces\\1_Long.jpg",
     "registered": "2025-11-28T15:02:34.059967"
+  },
+  {
+    "id": "dowifop",
+    "name": "BinhTT53",
+    "photo": "C:\\Users\\dowif\\Documents\\smart-class-cam\\data\\known_faces\\dowifop_BinhTT53.jpg",
+    "registered": "2025-12-05T17:04:55.709950"
+  },
+  {
+    "id": "Condimemay",
+    "name": "TruongNQ38",
+    "photo": "C:\\Users\\dowif\\Documents\\smart-class-cam\\data\\known_faces\\Condimemay_TruongNQ38.jpg",
+    "registered": "2025-12-05T17:51:23.618509"
   }
 ]

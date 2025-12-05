@@ -1,6 +1,6 @@
 """
-Smart Classroom Attendance System
-- Face Recognition (InsightFace - FAST!)
+Smart Classroom Attendance System - Optimized for RTX 3060 6GB
+- Face Recognition (InsightFace with CUDA)
 - Action Detection (MediaPipe)
 - Real-time monitoring of 40-50 students
 """
@@ -12,39 +12,50 @@ import mediapipe as mp
 from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple, Dict, Optional
-from pathlib import Path
+import time
+import onnxruntime as ort
+print(f"ONNX Runtime providers: {ort.get_available_providers()}")
 
-# Import torch first to load CUDA libraries
+# Import torch to load CUDA libraries
 try:
     import torch
     if torch.cuda.is_available():
         print(f"✓ PyTorch CUDA available: {torch.cuda.get_device_name(0)}")
+        print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
 except ImportError:
-    print("⚠ PyTorch not installed - GPU may not work")
-    pass
+    print("⚠ PyTorch not installed - GPU may still work via ONNX")
 
 import insightface
 from insightface.app import FaceAnalysis
 
-# from camera.tapo_stream import TapoCamera  # Not needed, using OpenCV directly
 
 # ============= CONFIGURATION =============
+
 RTSP_URL = "rtsp://Camera1:123456A@a@192.168.1.14:554/stream1"
 
+# CUDA Provider Options 
+CUDA_PROVIDER_OPTIONS = {
+    'device_id': 0,
+    'arena_extend_strategy': 'kSameAsRequested',
+    'gpu_mem_limit': 4 * 1024 * 1024 * 1024,  # 4GB limit (chừa 2GB cho system)
+    'cudnn_conv_algo_search': 'HEURISTIC',     # EXHAUSTIVE chậm startup
+    'do_copy_in_default_stream': True,
+}
+
 # Face Recognition Settings
-RECOGNITION_THRESHOLD = 0.4  # Lower = stricter (0.3-0.5 recommended)
-DETECTION_SIZE = (640, 640)  # Detection input size (smaller = faster)
+RECOGNITION_THRESHOLD = 0.45  # Lower = stricter (0.3-0.5 recommended)
+DETECTION_SIZE = (320, 320)   # Smaller = faster (320 cho speed, 480 cho accuracy)
 
 # Anti-Flashing Settings
 TRACKING_DISTANCE = 100  # pixels - faces closer than this are same person
-CONFIDENCE_VOTES = 3     # Need N consistent recognitions before showing name (reduce flashing)
+CONFIDENCE_VOTES = 3     # Need N consistent recognitions before showing name
 
 # Performance Settings
-FRAME_SKIP = 2  # Process every Nth frame (higher = faster but less smooth detection)
-DISPLAY_SCALE = 0.5  # Display window size (smaller = faster rendering)
-ENABLE_POSE_DETECTION = False  # Set to False for 2-3x speed boost (no action detection)
-RESIZE_BEFORE_PROCESS = True  # Resize frame before processing
-PROCESS_WIDTH = 480  # Width to resize to (smaller = faster)
+FRAME_SKIP = 2           # Process every Nth frame (2-3 recommended)
+DISPLAY_SCALE = 1        # Display window scale
+ENABLE_POSE_DETECTION = False  # Tắt để tăng FPS, bật nếu cần action detection
+RESIZE_BEFORE_PROCESS = True
+PROCESS_WIDTH = 480      # Width to resize to before processing
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
@@ -59,6 +70,38 @@ UNKNOWN_FACES_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# ============= CAMERA WRAPPER - TỐI ƯU =============
+class CameraWrapper:
+    """Optimized camera wrapper - không grab nhiều frames gây lag"""
+    
+    def __init__(self, source):
+        self.cap = cv2.VideoCapture(source)
+        
+        # Optimize buffer
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # Set properties for webcam
+        if isinstance(source, int):
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        
+        # For RTSP - use TCP and reduce latency
+        if isinstance(source, str) and 'rtsp' in source.lower():
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    
+    def get_frame(self):
+        """Get single frame - optimized"""
+        ret, frame = self.cap.read()
+        return frame if ret else None
+    
+    def isOpened(self):
+        return self.cap.isOpened()
+    
+    def close(self):
+        self.cap.release()
+
+
 # ============= ACTION DETECTOR =============
 class ActionDetector:
     """Detect student actions using MediaPipe pose detection"""
@@ -71,7 +114,7 @@ class ActionDetector:
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
-        self.enabled = True  # Can disable pose detection for speed
+        self.enabled = True # Can disable pose detection for speed
     
     def detect_action(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> str:
         """
@@ -164,69 +207,95 @@ class SmartAttendanceSystem:
     """Complete attendance system with face recognition and action detection"""
     
     def __init__(self):
-        print("Initializing InsightFace...")
+        print("\n" + "="*60)
+        print("INITIALIZING SMART ATTENDANCE SYSTEM")
+        print("="*60)
+        
+        # ===== KHỞI TẠO INSIGHTFACE VỚI GPU =====
+        print("\n[1/4] Initializing InsightFace with GPU...")
+        
+        # Provider với CUDA options đã config
+        providers = [
+            ('CUDAExecutionProvider', CUDA_PROVIDER_OPTIONS),
+            'CPUExecutionProvider'
+        ]
         
         try:
-            # Initialize InsightFace with GPU
-            print("Attempting to use GPU...")
             self.face_app = FaceAnalysis(
-                name='buffalo_l',  # Model pack: buffalo_l, buffalo_m, buffalo_s
-                providers=['CUDAExecutionProvider', 'CPUExecutionProvider']  # Try GPU first
+                name='buffalo_l',
+                providers=providers,
+                allowed_modules=['detection', 'recognition']
             )
             self.face_app.prepare(ctx_id=0, det_size=DETECTION_SIZE)
             
-            # Check which provider is actually being used
-            print(f"✓ Using provider: {self.face_app.det_model.session.get_providers()[0]}")
+            # Verify GPU is being used
+            active_provider = self.face_app.det_model.session.get_providers()[0]
+            print(f"  → Active provider: {active_provider}")
             
-            if 'CUDAExecutionProvider' in str(self.face_app.det_model.session.get_providers()):
-                print("✓ GPU acceleration enabled!")
+            if 'CUDA' in active_provider:
+                print("  ✓ GPU acceleration enabled!")
+                self._print_gpu_info()
             else:
-                print("⚠ Warning: Falling back to CPU (GPU not available)")
+                print("  ⚠ WARNING: Running on CPU - Check onnxruntime-gpu installation!")
                 
         except Exception as e:
-            print(f"⚠ GPU initialization failed: {e}")
-            print("Falling back to CPU mode...")
+            print(f"  ⚠ GPU initialization failed: {e}")
+            print("  → Falling back to CPU mode...")
             self.face_app = FaceAnalysis(
                 name='buffalo_l',
                 providers=['CPUExecutionProvider']
             )
-            self.face_app.prepare(ctx_id=0, det_size=DETECTION_SIZE)
-            print("✓ Face recognition initialized (CPU mode)")
+            self.face_app.prepare(ctx_id=-1, det_size=DETECTION_SIZE)
+            print("  ✓ Face recognition initialized (CPU mode)")
         
-        # Student database
-        self.students_db = {}  # {name: {id, embedding, photo_path, ...}}
-        self.checked_in = {}   # {name: {time, actions}}
+        # ===== KHỞI TẠO DATABASE =====
+        print("\n[2/4] Loading student database...")
+        self.students_db = {}   # {name: {id, embedding, photo_path, ...}}
+        self.checked_in = {}    # {name: {time, actions}}
         
-        # Face tracking to prevent flashing
-        self.face_history = {}  # {face_id: {name: str, count: int, last_seen: int}}
+        self.db_file = KNOWN_FACES_DIR / "students.json"
+        self.embeddings_file = KNOWN_FACES_DIR / "embeddings.npy"
+        self.load_database()
+        
+        # ===== KHỞI TẠO TRACKING =====
+        print("\n[3/4] Initializing face tracking...")
+        self.face_history = {}
         self.next_face_id = 0
         self.tracking_threshold = TRACKING_DISTANCE
         self.confidence_votes = CONFIDENCE_VOTES
+        self.frame_count = 0
+        self.last_detections = []
+        print(f"  → Tracking distance: {TRACKING_DISTANCE}px")
+        print(f"  → Confidence votes: {CONFIDENCE_VOTES}")
         
-        # Action tracking
+        # ===== KHỞI TẠO ACTION DETECTOR =====
+        print("\n[4/4] Initializing action detector...")
         self.action_detector = ActionDetector()
         self.action_detector.enabled = ENABLE_POSE_DETECTION
-        self.action_history = {}  # {name: [actions]}
+        self.action_history = {}
+        print(f"  → Pose detection: {'Enabled' if ENABLE_POSE_DETECTION else 'Disabled'}")
         
-        # Tracking
-        self.frame_count = 0
-        
-        # Files
-        self.db_file = KNOWN_FACES_DIR / "students.json"
-        self.embeddings_file = KNOWN_FACES_DIR / "embeddings.npy"
-        
-        # Load database
-        self.load_database()
-        
-        print("✓ System initialized")
+        print("\n" + "="*60)
+        print("✓ SYSTEM INITIALIZED SUCCESSFULLY")
+        print("="*60)
+    
+    def _print_gpu_info(self):
+        """Print GPU information"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                print(f"  → GPU: {gpu_name}")
+                print(f"  → VRAM: {total_mem:.1f} GB")
+        except:
+            pass
     
     def load_database(self):
         """Load student database"""
-        # Load student info
         if self.db_file.exists():
             with open(self.db_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Convert list back to dict
                 self.students_db = {item['name']: item for item in data}
             
             # Load embeddings
@@ -236,31 +305,26 @@ class SmartAttendanceSystem:
                     if name in embeddings_data:
                         self.students_db[name]['embedding'] = embeddings_data[name]
             
-            print(f"✓ Loaded {len(self.students_db)} students")
+            print(f"  ✓ Loaded {len(self.students_db)} students")
         else:
-            print("! No students registered yet")
+            print("  ! No students registered yet")
     
     def save_database(self):
         """Save student database"""
-        # Save student info (without embeddings)
         students_list = []
         embeddings_dict = {}
         
         for name, info in self.students_db.items():
-            # Save info without embedding
             info_copy = {k: v for k, v in info.items() if k != 'embedding'}
             students_list.append(info_copy)
             
-            # Save embedding separately
             if 'embedding' in info:
                 embeddings_dict[name] = info['embedding']
         
         with open(self.db_file, 'w', encoding='utf-8') as f:
             json.dump(students_list, f, ensure_ascii=False, indent=2)
         
-        # Save embeddings
         np.save(self.embeddings_file, embeddings_dict)
-        
         print(f"✓ Saved {len(self.students_db)} students to database")
     
     def register_student(self, name: str, student_id: str, photo_path: str) -> bool:
@@ -353,7 +417,7 @@ class SmartAttendanceSystem:
         center_x = x + w // 2
         center_y = y + h // 2
         
-        # Remove old tracks (not seen in 30 frames)
+        # Remove old tracks
         to_remove = []
         for face_id, track in self.face_history.items():
             if self.frame_count - track['last_seen'] > 30:
@@ -556,7 +620,7 @@ class SmartAttendanceSystem:
         
         return frame
     
-    def draw_ui(self, frame: np.ndarray, fps: float = 0) -> np.ndarray:
+    def draw_ui(self, frame: np.ndarray, fps: float = 0, detect_time: float = 0) -> np.ndarray:
         """Draw UI overlay with statistics"""
         h, w = frame.shape[:2]
         
@@ -572,9 +636,9 @@ class SmartAttendanceSystem:
         # Stats
         present = len(self.checked_in)
         total = len(self.students_db)
-        stats = f"Present: {present}/{total} | FPS: {fps:.1f}"
+        stats = f"Present: {present}/{total} | FPS: {fps:.1f} | Detect: {detect_time:.0f}ms"
         cv2.putText(frame, stats, (10, 70),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         # Action statistics
         action_counts = {}
@@ -654,116 +718,106 @@ class SmartAttendanceSystem:
         print("SMART CLASSROOM ATTENDANCE SYSTEM")
         print("="*60)
         print(f"Students registered: {len(self.students_db)}")
-        print("Connecting to camera...")
+        print(f"Detection size: {DETECTION_SIZE}")
+        print(f"Frame skip: {FRAME_SKIP}")
+        print(f"Pose detection: {'ON' if ENABLE_POSE_DETECTION else 'OFF'}")
         
-        # Open camera with error handling
-        try:
-            # Use OpenCV directly (works from test!)
-            print("Connecting with OpenCV...")
-            cam = cv2.VideoCapture(RTSP_URL)
-            
-            if not cam.isOpened():
-                print(f"✗ Failed to connect to camera")
-                print(f"Check RTSP URL: {RTSP_URL}")
-                return
-            
-            print("✓ Camera connected via OpenCV")
-            
-            # Wrapper class to provide consistent interface
-            class CameraWrapper:
-                def __init__(self, cap):
-                    self.cap = cap
-                    # Set buffer size to 1 (read latest frame only)
-                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                
-                def get_frame(self):
-                    # Grab multiple frames to get the latest one
-                    for _ in range(5):  # Skip buffered frames
-                        self.cap.grab()
-                    ret, frame = self.cap.retrieve()
-                    return frame if ret else None
-                
-                def close(self):
-                    self.cap.release()
-            
-            cam = CameraWrapper(cam)
-            
-        except Exception as e:
-            print(f"✗ Camera error: {e}")
+        # Chọn nguồn camera
+        print("\nChọn nguồn video:")
+        print("1. RTSP (mặc định)")
+        print("2. Webcam")
+        source_choice = input("Lựa chọn (1/2) [1]: ").strip() or "1"
+        
+        if source_choice == "2":
+            webcam_index = input("Chọn webcam index [0]: ").strip()
+            video_source = int(webcam_index) if webcam_index else 0
+            print(f"Sử dụng webcam index: {video_source}")
+        else:
+            custom_rtsp = input(f"RTSP URL (Enter để dùng mặc định)\n> ").strip()
+            video_source = custom_rtsp if custom_rtsp else RTSP_URL
+            print(f"Sử dụng RTSP: {video_source}")
+        
+        print("\nConnecting to camera...")
+        
+        # Open camera
+        cam = CameraWrapper(video_source)
+        
+        if not cam.isOpened():
+            print(f"✗ Failed to connect to camera")
             return
         
+        print("✓ Camera connected")
         print("\nMonitoring started...")
         print("-"*60)
         
         # FPS calculation
-        import time
         fps_start = time.time()
         fps_counter = 0
         fps = 0
+        detect_time = 0
+        detect_times = []
         
         try:
             while True:
-                try:
-                    frame = cam.get_frame()
-                    if frame is None:
-                        print("⚠ No frame received")
-                        continue
-                    
-                    self.frame_count += 1
-                    fps_counter += 1
-                    
-                    # Calculate FPS
-                    if fps_counter >= 30:
-                        fps = fps_counter / (time.time() - fps_start)
-                        fps_start = time.time()
-                        fps_counter = 0
-                    
-                    # Process every Nth frame (recognition)
-                    detections = []
-                    if self.frame_count % FRAME_SKIP == 0:
-                        detections = self.detect_and_recognize(frame)
-                    
-                    # Always draw boxes (even on skipped frames) for smooth display
-                    if detections:
-                        self.last_detections = detections
-                    if hasattr(self, 'last_detections'):
-                        frame = self.draw_results(frame, self.last_detections)
-                    
-                    # Draw UI
-                    frame = self.draw_ui(frame, fps)
-                    
-                    # Scale for display
-                    display_frame = cv2.resize(frame, (0, 0), 
-                                              fx=DISPLAY_SCALE, 
-                                              fy=DISPLAY_SCALE)
-                    
-                    # Display
-                    cv2.imshow("Smart Classroom Attendance", display_frame)
-                    
-                    # Keyboard controls
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q') or key == 27:  # Q or ESC
-                        break
-                    elif key == ord('l'):
-                        self.print_attendance()
-                    elif key == ord('r'):
-                        self.checked_in.clear()
-                        self.action_history.clear()
-                        print("\n✓ Attendance reset\n")
-                    elif key == ord('s'):
-                        self.save_attendance_log()
-                
-                except Exception as frame_error:
-                    print(f"Frame processing error: {frame_error}")
-                    import traceback
-                    traceback.print_exc()
+                frame = cam.get_frame()
+                if frame is None:
+                    print("⚠ No frame received")
+                    time.sleep(0.1)
                     continue
+                
+                self.frame_count += 1
+                fps_counter += 1
+                
+                # Calculate FPS every 30 frames
+                if fps_counter >= 30:
+                    fps = fps_counter / (time.time() - fps_start)
+                    fps_start = time.time()
+                    fps_counter = 0
+                    
+                    if detect_times:
+                        detect_time = sum(detect_times) / len(detect_times) * 1000
+                        detect_times.clear()
+                
+                # Process every Nth frame
+                detections = []
+                if self.frame_count % FRAME_SKIP == 0:
+                    t1 = time.time()
+                    detections = self.detect_and_recognize(frame)
+                    detect_times.append(time.time() - t1)
+                
+                # Draw results
+                if detections:
+                    self.last_detections = detections
+                if self.last_detections:
+                    frame = self.draw_results(frame, self.last_detections)
+                
+                # Draw UI
+                frame = self.draw_ui(frame, fps, detect_time)
+                
+                # Scale for display
+                if DISPLAY_SCALE != 1:
+                    frame = cv2.resize(frame, (0, 0), fx=DISPLAY_SCALE, fy=DISPLAY_SCALE)
+                
+                # Display
+                cv2.imshow("Smart Classroom Attendance", frame)
+                
+                # Keyboard controls
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 27:
+                    break
+                elif key == ord('l'):
+                    self.print_attendance()
+                elif key == ord('r'):
+                    self.checked_in.clear()
+                    self.action_history.clear()
+                    print("\n✓ Attendance reset\n")
+                elif key == ord('s'):
+                    self.save_attendance_log()
         
         except KeyboardInterrupt:
             print("\n\nStopped by user")
         
         finally:
-            # Cleanup
             print("\n" + "="*60)
             print("FINAL ATTENDANCE")
             print("="*60)
@@ -833,7 +887,7 @@ if __name__ == "__main__":
     # Choose mode:
     
     # Mode 1: Register students first
-    # register_students()
+    register_students()
     
     # Mode 2: Run attendance directly (if already registered)
-    main()
+    # main()
